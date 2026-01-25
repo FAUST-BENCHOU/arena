@@ -24,8 +24,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-
-	"github.com/kubeflow/arena/pkg/apis/types"
 )
 
 /**
@@ -200,13 +198,10 @@ func SubmitJob(name string, trainingType string, namespace string, values interf
 		return err
 	}
 
-	// 6. Patch OwnerReference for tfjob / pytorchjob
-	if trainingType == string(types.TFTrainingJob) ||
-		trainingType == string(types.PytorchTrainingJob) {
-		err := kubectl.PatchOwnerReferenceWithAppInfoFile(name, trainingType, appInfoFileName, namespace)
-		if err != nil {
-			log.Debugf("Failed to patch ownerReference %s due to %v`", name, err)
-		}
+	// 6. Patch OwnerReference for all training job types
+	err = kubectl.PatchOwnerReferenceWithAppInfoFile(name, trainingType, appInfoFileName, namespace)
+	if err != nil {
+		log.Debugf("Failed to patch ownerReference %s due to %v", name, err)
 	}
 
 	// 7. Clean up the template file
