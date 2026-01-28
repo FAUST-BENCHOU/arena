@@ -33,6 +33,7 @@ import (
 	lwsClient "sigs.k8s.io/lws/client-go/clientset/versioned"
 
 	"github.com/kubeflow/arena/pkg/apis/config"
+	"github.com/kubeflow/arena/pkg/apis/types"
 )
 
 var kubectlCmd = []string{"arena-kubectl"}
@@ -385,7 +386,36 @@ func UpdateLWSJob(lwsJob *lwsv1.LeaderWorkerSet) error {
 	return err
 }
 
-// PatchOwnerReferenceWithAppInfoFile patch tfjob / pytorchjob ownerReference
+// getTrainingJobCRDName returns the CRD resource name for a given training job type
+// Returns empty string if the training type is not supported
+func getTrainingJobCRDName(trainingType string) string {
+	switch trainingType {
+	case string(types.TFTrainingJob):
+		return "tfjob.kubeflow.org"
+	case string(types.PytorchTrainingJob):
+		return "pytorchjob.kubeflow.org"
+	case string(types.MPITrainingJob), string(types.HorovodTrainingJob):
+		return "mpijob.kubeflow.org"
+	case string(types.ETTrainingJob), string(types.DeepSpeedTrainingJob):
+		return "trainingjob.kai.alibabacloud.com"
+	case string(types.VolcanoTrainingJob):
+		return "job.batch.volcano.sh"
+	case string(types.SparkTrainingJob):
+		return "sparkapplication.sparkoperator.k8s.io"
+	case string(types.RayJob):
+		return "rayjob.ray.io"
+	default:
+		return ""
+	}
+}
+
+// getTrainingJobCRDResourceName returns the full resource name (kind.apiVersion) for skipping owner reference patching
+func getTrainingJobCRDResourceName(trainingType, name string) string {
+	crdName := getTrainingJobCRDName(trainingType)
+	return fmt.Sprintf("%s/%s", crdName, name)
+}
+
+// PatchOwnerReferenceWithAppInfoFile patch training job ownerReference for all resources created by Arena
 func PatchOwnerReferenceWithAppInfoFile(name, trainingType, appInfoFile, namespace string) error {
 	data, err := os.ReadFile(appInfoFile)
 	if err != nil {
@@ -405,8 +435,14 @@ func PatchOwnerReferenceWithAppInfoFile(name, trainingType, appInfoFile, namespa
 	}
 	errs := []string{}
 
+	// get training job CRD resource name
+	crdResourceName := getTrainingJobCRDName(trainingType)
+	if crdResourceName == "" {
+		return fmt.Errorf("unsupported training job type: %s", trainingType)
+	}
+
 	// get training job
-	args := []string{binary, "get", trainingType, name, "--namespace", namespace, "-o json"}
+	args := []string{binary, "get", crdResourceName, name, "--namespace", namespace, "-o json"}
 	cmd := exec.Command("bash", "-c", strings.Join(args, " "))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -427,10 +463,12 @@ func PatchOwnerReferenceWithAppInfoFile(name, trainingType, appInfoFile, namespa
 	configmapName := fmt.Sprintf("%v-%v", name, trainingType)
 	resources = append(resources, "configmap/"+configmapName)
 
+	// get the training job resource name to skip
+	trainingJobResourceName := getTrainingJobCRDResourceName(trainingType, name)
+
 	for _, resource := range resources {
-		// skip tfjob / pytorchjob.
-		if resource == "tfjob.kubeflow.org/"+name ||
-			resource == "pytorchjob.kubeflow.org/"+name {
+		// skip the training job CRD itself
+		if resource == trainingJobResourceName {
 			continue
 		}
 
